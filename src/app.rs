@@ -160,9 +160,11 @@ impl App {
                 None => option.value.clone(),                
             }
         }      
-        self.load_aws_config(Some(false));      
+        // Don't authenticate on startup - defer until needed
+        // self.load_aws_config(Some(false));      
 
-        self.get_account_list();
+        // Show message that authentication is needed instead of trying to get accounts
+        // self.get_account_list();
                       
         while !self.exit {
             terminal.draw(|frame| self.render_frame(frame))?;
@@ -341,6 +343,17 @@ impl App {
 
     pub fn exit(&mut self) {
         self.exit = true;
+    }
+
+    pub fn start_authentication(&mut self) {
+        // Set the authenticating flag and let the existing load_aws_config handle it
+        // The issue is that load_aws_config blocks, so we need to handle this differently
+        self.authenticating = true;
+        self.load_aws_config(Some(false));
+        if !self.aws_config_provider.account_info_provider.is_none() {
+            self.get_account_list();
+        }
+        self.authenticating = false;
     }
 
     pub fn export(&mut self) {

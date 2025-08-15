@@ -13,6 +13,27 @@ pub fn get_layout(f: &mut Frame) -> Rc<[Rect]> {
 }
 
 pub fn handle_key_events(app: &mut App, key: KeyEvent) -> Result<(), ()>{
+    // If we need authentication and not currently authenticating, handle auth trigger
+    if app.aws_config_provider.account_info_provider.is_none() && !app.authenticating {
+        match key.code {
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                // Start authentication process
+                app.authenticating = true;
+                app.start_authentication();
+            }
+            KeyCode::Char('c') => {
+                app.currently_editing = true;
+                app.current_page = crate::app::CurrentPage::Config;
+            }
+            KeyCode::Char('q') => {
+                app.exit = true;
+            }
+            _ => {}
+        }
+        return Ok(());
+    }
+
+    // Normal account list navigation when authenticated
     match key.code {
         KeyCode::Down => {
             app.next();
@@ -41,6 +62,12 @@ pub fn render_accounts(f: &mut Frame, app: &mut App, area: Rect) {
     // If authenticating, show authentication UI instead of account list
     if app.authenticating {
         render_authentication_ui(f, app, area);
+        return;
+    }
+
+    // If not authenticated yet, show prompt to authenticate
+    if app.aws_config_provider.account_info_provider.is_none() {
+        render_authentication_prompt(f, app, area);
         return;
     }
 
@@ -185,4 +212,89 @@ pub fn render_authentication_ui(f: &mut Frame, app: &mut App, area: Rect) {
     // Clear the area first to ensure clean rendering
     f.render_widget(Clear, area);
     f.render_widget(auth_paragraph, auth_area);
+}
+
+pub fn render_authentication_prompt(f: &mut Frame, app: &mut App, area: Rect) {
+    let instructions = Title::from(Line::from(vec![
+        " Authenticate ".into(),
+        "<ENTER> ".green().bold(),
+        " Config ".into(),
+        "<C> ".yellow().bold(),
+        " Quit ".into(),
+        "<Q> ".red().bold(),
+    ]));
+
+    let start_url = app.config_options.options.iter().find(|option| option.name == "start_url").unwrap().value.clone();
+    let url_title = Title::from(format!(" Start URL: {} ", start_url).bold());
+
+    let prompt_title = Title::from(" AWS SSO Authentication Required ".bold());
+    let prompt_block = Block::bordered()
+        .title(prompt_title.alignment(Alignment::Center))
+        .title(instructions
+            .alignment(Alignment::Center)
+            .position(Position::Bottom)
+        )
+        .title(url_title.alignment(Alignment::Right))
+        .border_set(border::THICK)
+        .borders(Borders::ALL);
+
+    // Create centered layout for prompt
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(25),
+            Constraint::Percentage(50),
+            Constraint::Percentage(25),
+        ])
+        .split(area);
+
+    let horizontal = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(10),
+            Constraint::Percentage(80),
+            Constraint::Percentage(10),
+        ])
+        .split(vertical[1]);
+
+    let prompt_area = horizontal[1];
+
+    let prompt_text = if start_url.is_empty() {
+        Text::from(vec![
+            Line::from(vec![
+                Span::styled("Configuration Required", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Please configure your AWS SSO Start URL first.", Style::default().fg(Color::White)),
+            ]),
+            Line::from(vec![
+                Span::styled("Press 'C' to open configuration.", Style::default().fg(Color::Gray)),
+            ]),
+        ])
+    } else {
+        Text::from(vec![
+            Line::from(vec![
+                Span::styled("Ready to Authenticate", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Press ENTER to authenticate with AWS SSO", Style::default().fg(Color::White)),
+            ]),
+            Line::from(vec![
+                Span::styled("and load your AWS accounts.", Style::default().fg(Color::White)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Your browser will open for authentication.", Style::default().fg(Color::Gray)),
+            ]),
+        ])
+    };
+
+    let prompt_paragraph = Paragraph::new(prompt_text)
+        .block(prompt_block)
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: true });
+
+    f.render_widget(prompt_paragraph, prompt_area);
 }
