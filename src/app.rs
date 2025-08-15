@@ -284,13 +284,23 @@ impl App {
 
     /// updates the application's self based on user input
     fn handle_events(&mut self) -> Result<()> {
-        match event::read()? {
-            // it's important to check that the event is a key press event as
-            // crossterm also emits key release and repeat events on Windows.
-            Event::Key(key_event) if key_event.kind == KeyEventKind::Press => self
-                .handle_key_event(key_event)
-                .wrap_err_with(|| format!("handling key event failed:\n{key_event:#?}")),
-            _ => Ok(()),
+        use std::time::Duration;
+        
+        // Use poll with timeout to allow UI updates during authentication
+        let timeout = Duration::from_millis(100); // Check for events every 100ms
+        
+        if event::poll(timeout)? {
+            match event::read()? {
+                // it's important to check that the event is a key press event as
+                // crossterm also emits key release and repeat events on Windows.
+                Event::Key(key_event) if key_event.kind == KeyEventKind::Press => self
+                    .handle_key_event(key_event)
+                    .wrap_err_with(|| format!("handling key event failed:\n{key_event:#?}")),
+                _ => Ok(()),
+            }
+        } else {
+            // No events available, return Ok to continue the loop
+            Ok(())
         }
     }
 
@@ -346,9 +356,8 @@ impl App {
     }
 
     pub fn start_authentication(&mut self) {
-        // Set the authenticating flag and let the existing load_aws_config handle it
-        // The issue is that load_aws_config blocks, so we need to handle this differently
         self.authenticating = true;
+        self.exit = false; // Ensure exit is false when starting auth
         self.load_aws_config(Some(false));
         if !self.aws_config_provider.account_info_provider.is_none() {
             self.get_account_list();
