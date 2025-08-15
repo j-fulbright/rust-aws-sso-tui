@@ -68,26 +68,39 @@ impl SsoAccessTokenProvider {
     }
 
     pub async fn get_access_token(&self, start_url: &str, new_token: bool, app: &mut App) -> Result<AccessToken> {        
+        log::debug!("get_access_token called with start_url='{}', new_token={}", start_url, new_token);
+        
         let cached_token_option = self.cache.get_cached_token();        
 
         match cached_token_option {
             Ok(cached_token) => {
-                if cached_token.is_expired() || new_token {
+                let is_expired = cached_token.is_expired();
+                log::debug!("Found cached token, expired={}, new_token={}", is_expired, new_token);
+                
+                if is_expired || new_token {
+                    log::info!("Getting new token (expired={}, forced={})", is_expired, new_token);
                     self.get_new_token(start_url, app).await
                 } else {
+                    log::info!("Refreshing existing token");
                     self.refresh_token(cached_token).await
                 }
             }
-            Err(_) => self.get_new_token(start_url, app).await,
+            Err(e) => {
+                log::info!("No cached token available ({}), getting new token", e);
+                self.get_new_token(start_url, app).await
+            },
         }
     }
 
     async fn get_new_token(&self, start_url: &str, app: &mut App) -> Result<AccessToken> {
+        log::debug!("Getting new token, registering device client");
         let device_client = self.register_device_client().await?;
+        log::debug!("Device client registered, starting authentication");
         self.authenticate(start_url, device_client, app).await
     }
 
     async fn register_device_client(&self) -> Result<DeviceClient, anyhow::Error> {
+        log::debug!("Registering device client with AWS SSO");
         let response = self
             .client
             .register_client()
@@ -106,10 +119,13 @@ impl SsoAccessTokenProvider {
             client_secret: String::from(client_secret),
             registration_expires_at
         };
+        log::debug!("Device client registered successfully with client_id: {}", client_id);
         Ok(device_client)
     }
 
     async fn authenticate(&self, start_url: &str, device_client: DeviceClient, app: &mut App) -> Result<AccessToken> {
+        log::info!("Starting device authorization with AWS SSO");
+        
         let auth_response = self
             .client
             .start_device_authorization()
@@ -119,23 +135,36 @@ impl SsoAccessTokenProvider {
             .send()
             .await?;
 
-        open::that(auth_response.verification_uri_complete().unwrap())?;
+        let verification_uri = auth_response.verification_uri_complete().unwrap();
+        let user_code = auth_response.user_code().unwrap();
+        
+        log::info!("Device authorization started - verification_uri: {}, user_code: {}", 
+                   verification_uri, user_code);
 
-        app.token_prompt = format!("Verify authorization code: {} (Press ESC to cancel)", auth_response.user_code().unwrap());
+        log::info!("Opening browser for authentication");
+        open::that(verification_uri)?;
+
+        app.token_prompt = format!("Verify authorization code: {} (Press ESC to cancel)", user_code);
 
         let interval = auth_response.interval();
         let max_retries = 120; // 120 retries * 5 seconds = 10 minutes max
         let total_timeout = TokioDuration::from_secs(600); // 10 minutes total timeout
         let mut retry_count = 0;
 
+        log::info!("Starting authentication polling loop - interval: {}s, max_retries: {}, timeout: {}s", 
+                   interval, max_retries, 600);
+
         // Wrap the entire polling loop in a timeout
         let result = timeout(total_timeout, async {
             loop {
                 // Check for cancellation flag
                 if app.exit && app.authenticating {
+                    log::info!("Authentication cancelled by user");
                     return Err(anyhow!("Authentication cancelled by user"));
                 }
 
+                log::debug!("Polling for token (attempt {})", retry_count + 1);
+                
                 let token_response = self
                     .client
                     .create_token()
@@ -151,6 +180,8 @@ impl SsoAccessTokenProvider {
                         let access_token = out.access_token().unwrap();
                         let refresh_token = out.refresh_token().unwrap();
                         let expires_at = Utc::now() + Duration::seconds(out.expires_in() as i64);
+
+                        log::info!("Authentication successful! Token expires at: {}", expires_at);
 
                         let access_token = AccessToken {
                             region: String::from(self.client.config().region().unwrap().to_string()),
@@ -170,17 +201,27 @@ impl SsoAccessTokenProvider {
                         
                         // Handle specific AWS SSO errors
                         if service_error.is_access_denied_exception() {
+                            log::error!("Access request was denied");
                             return Err(anyhow!("Access request rejected"));
                         }
                         
                         if service_error.is_expired_token_exception() {
+                            log::error!("Authentication token expired");
                             return Err(anyhow!("Authentication token expired. Please try again."));
                         }
 
                         // Check retry limit
                         retry_count += 1;
                         if retry_count >= max_retries {
+                            log::error!("Authentication timed out after {} retries", max_retries);
                             return Err(anyhow!("Authentication timed out after {} retries. Please try again.", max_retries));
+                        }
+
+                        // For authorization_pending, this is normal - just continue polling
+                        if service_error.is_authorization_pending_exception() {
+                            log::debug!("Authorization still pending, will retry in {} seconds", interval);
+                        } else {
+                            log::warn!("Authentication error (attempt {}/{}): {:?}", retry_count, max_retries, service_error);
                         }
 
                         // Update prompt with retry info
@@ -199,8 +240,14 @@ impl SsoAccessTokenProvider {
         app.token_prompt = String::new();
         
         match result {
-            Ok(auth_result) => auth_result,
-            Err(_) => Err(anyhow!("Authentication timed out after 10 minutes. Please try again.")),
+            Ok(auth_result) => {
+                log::info!("Authentication completed successfully");
+                auth_result
+            },
+            Err(_) => {
+                log::error!("Authentication timed out after 10 minutes");
+                Err(anyhow!("Authentication timed out after 10 minutes. Please try again."))
+            },
         }
     }
 

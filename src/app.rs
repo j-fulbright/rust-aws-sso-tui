@@ -132,6 +132,7 @@ impl App {
 
     /// runs the application's main loop until the user quits
     pub fn run(&mut self, terminal: &mut tui::Tui) -> Result<()> {   
+        log::info!("Starting application run loop");
         self.routes = self.create_routes();
         self.config_options = ConfigOptions {
             options: vec![
@@ -160,11 +161,13 @@ impl App {
                 None => option.value.clone(),                
             }
         }      
-        // Don't authenticate on startup - defer until needed
-        // self.load_aws_config(Some(false));      
+        
+        log::info!("Config loaded, starting automatic authentication");
+        // Start automatic authentication on startup
+        self.load_aws_config(Some(false));      
 
-        // Show message that authentication is needed instead of trying to get accounts
-        // self.get_account_list();
+        log::info!("Authentication completed, loading account list");
+        self.get_account_list();
                       
         while !self.exit {
             terminal.draw(|frame| self.render_frame(frame))?;
@@ -177,30 +180,43 @@ impl App {
         let start_url = self.config_options.options.iter().find(|option| option.name == "start_url").unwrap().value.clone();
         let region = self.config_options.options.iter().find(|option| option.name == "region").unwrap().value.clone();
 
+        log::info!("Loading AWS config with start_url='{}', region='{}', new_token={:?}", 
+                   start_url, region, new_token);
+
         // Set authenticating flag before starting authentication
         self.authenticating = true;
         self.exit = false; // Reset exit flag
         
+        log::debug!("Set authenticating=true, calling sso::get_aws_config");
+        
         self.aws_config_provider = match sso::get_aws_config(start_url.as_str(), region.as_str(), self, Some(new_token.unwrap_or(false))) {
             Ok(access_token) => {
+                log::info!("AWS config loaded successfully");
                 self.authenticating = false;
                 access_token
             },
-            Err(_) => {
+            Err(e) => {
+                log::error!("Failed to load AWS config: {}", e);
                 self.authenticating = false;
                 self.exit = false; // Reset exit flag after authentication failure
                 ConfigProvider::default()
             },
         };
+        
+        log::debug!("Set authenticating=false, AWS config loading complete");
     }
 
     pub fn get_account_list(&mut self) {
+        log::debug!("Getting account list");
         if !self.aws_config_provider.account_info_provider.is_none() {
+            log::info!("AWS config provider available, fetching SSO accounts");
             let sso_accounts = sso::get_sso_accounts(self);
             self.rows = vec![];
             match sso_accounts {
                 Ok(sso_accounts) => {          
+                    log::info!("Successfully loaded {} SSO accounts", sso_accounts.len());
                     for account in sso_accounts {
+                        log::debug!("Adding account: {} ({})", account.account_name, account.account_id);
                         self.rows.push(AccountRow {
                             account_name: account.account_name,
                             account_id: account.account_id,
@@ -209,6 +225,7 @@ impl App {
                     } 
                 }
                 Err(err) => {
+                    log::error!("Failed to get SSO accounts: {}", err);
                     self.rows.push(AccountRow {
                         account_name: "Error".to_string(),
                         account_id: err.to_string(),
@@ -217,6 +234,7 @@ impl App {
                 }
             }  
         } else {
+            log::warn!("No AWS config provider available");
             self.rows = vec![];
             self.rows.push(AccountRow {
                 account_name: "Error".to_string(),
@@ -355,15 +373,6 @@ impl App {
         self.exit = true;
     }
 
-    pub fn start_authentication(&mut self) {
-        self.authenticating = true;
-        self.exit = false; // Ensure exit is false when starting auth
-        self.load_aws_config(Some(false));
-        if !self.aws_config_provider.account_info_provider.is_none() {
-            self.get_account_list();
-        }
-        self.authenticating = false;
-    }
 
     pub fn export(&mut self) {
         #[cfg(target_os = "windows")]

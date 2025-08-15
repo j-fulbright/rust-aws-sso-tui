@@ -36,12 +36,18 @@ impl Default for ConfigProvider {
 
 #[::tokio::main]
 pub async fn get_aws_config(start_url: &str, region: &str, app: &mut App, new_token: Option<bool>) -> Result<ConfigProvider, anyhow::Error> {
+    log::info!("get_aws_config called with start_url='{}', region='{}', new_token={:?}", 
+               start_url, region, new_token);
+    
     if start_url.is_empty() {
+        log::error!("SSO Start URL is empty");
         return Err(Error::msg("SSO Start URL is required"));
     }
     let user_dirs = UserDirs::new().expect("Could not resolve user HOME.");
     let home_dir = user_dirs.home_dir();
     let aws_config_dir = home_dir.join(".aws");
+    
+    log::debug!("Using AWS config dir: {:?}", aws_config_dir);
 
     let config = aws_config::SdkConfig::builder()
         .region(Some(Region::new(region.to_string())))
@@ -49,33 +55,47 @@ pub async fn get_aws_config(start_url: &str, region: &str, app: &mut App, new_to
         .build();
 
     let session_name = session_name(&start_url);
+    log::debug!("Using session name: {}", session_name);
+    
     let token_provider = SsoAccessTokenProvider::new(&config, session_name.as_str(), &aws_config_dir)?;
+    log::debug!("Created SsoAccessTokenProvider, getting access token");
+    
     let access_token = token_provider.get_access_token(&start_url, new_token.unwrap_or(false), app).await;
 
     match access_token {
         Ok(token) => {
+            log::info!("Access token obtained successfully, creating ConfigProvider");
             Ok(ConfigProvider {
                 access_token: token,
                 account_info_provider: Some(AccountInfoProvider::new(&config)),
                 token_provider: Some(token_provider),
             })
         }
-        Err(e) => Err(e),
+        Err(e) => {
+            log::error!("Failed to get access token: {}", e);
+            Err(e)
+        },
     }
 }
 
 #[::tokio::main]
 pub async fn get_sso_accounts(app: &mut App) -> Result<Vec<AccountInfo>, anyhow::Error> {
+    log::debug!("get_sso_accounts called");
+    
     let config_provider = app.aws_config_provider.clone();
     let token_provider = &config_provider.token_provider.as_ref().unwrap();
     let start_url = &app.config_options.options.iter().find(|option| option.name == "start_url").unwrap().value.clone();
+    
+    log::debug!("Getting access token for SSO accounts");
     let access_token = token_provider.get_access_token(start_url, false, app).await?;
 
+    log::debug!("Fetching account list from AWS");
     let mut sso_accounts = config_provider.account_info_provider.as_ref().unwrap()
         .get_account_list(&access_token)
         .await?;
     
     sso_accounts.sort();
+    log::info!("Retrieved and sorted {} SSO accounts", sso_accounts.len());
     
     Ok(sso_accounts)
 }

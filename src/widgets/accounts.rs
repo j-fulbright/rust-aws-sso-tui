@@ -13,27 +13,6 @@ pub fn get_layout(f: &mut Frame) -> Rc<[Rect]> {
 }
 
 pub fn handle_key_events(app: &mut App, key: KeyEvent) -> Result<(), ()>{
-    // If we need authentication and not currently authenticating, handle auth trigger
-    if app.aws_config_provider.account_info_provider.is_none() && !app.authenticating {
-        match key.code {
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                // Start authentication process
-                app.authenticating = true;
-                app.start_authentication();
-            }
-            KeyCode::Char('c') => {
-                app.currently_editing = true;
-                app.current_page = crate::app::CurrentPage::Config;
-            }
-            KeyCode::Char('q') => {
-                app.exit = true;
-            }
-            _ => {}
-        }
-        return Ok(());
-    }
-
-    // Normal account list navigation when authenticated
     match key.code {
         KeyCode::Down => {
             app.next();
@@ -65,9 +44,9 @@ pub fn render_accounts(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    // If not authenticated yet, show prompt to authenticate
+    // If not authenticated yet and not currently authenticating, show loading state
     if app.aws_config_provider.account_info_provider.is_none() {
-        render_authentication_prompt(f, app, area);
+        render_loading_ui(f, app, area);
         return;
     }
 
@@ -174,11 +153,17 @@ pub fn render_authentication_ui(f: &mut Frame, app: &mut App, area: Rect) {
 
     let auth_area = horizontal[1];
 
+    // Create a simple spinner animation based on time
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
+    let spinner_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let spinner = spinner_chars[(now / 100) as usize % spinner_chars.len()];
+
     // Authentication message text
     let auth_text = if app.token_prompt.is_empty() {
         Text::from(vec![
             Line::from(vec![
-                Span::styled("Authenticating with AWS SSO...", Style::default().fg(Color::Yellow)),
+                Span::styled(format!("{} Authenticating with AWS SSO...", spinner), Style::default().fg(Color::Yellow)),
             ]),
             Line::from(""),
             Line::from(vec![
@@ -191,7 +176,7 @@ pub fn render_authentication_ui(f: &mut Frame, app: &mut App, area: Rect) {
     } else {
         Text::from(vec![
             Line::from(vec![
-                Span::styled("AWS SSO Authentication", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{} AWS SSO Authentication", spinner), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             ]),
             Line::from(""),
             Line::from(vec![
@@ -214,10 +199,10 @@ pub fn render_authentication_ui(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(auth_paragraph, auth_area);
 }
 
-pub fn render_authentication_prompt(f: &mut Frame, app: &mut App, area: Rect) {
+pub fn render_loading_ui(f: &mut Frame, app: &mut App, area: Rect) {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    
     let instructions = Title::from(Line::from(vec![
-        " Authenticate ".into(),
-        "<ENTER> ".green().bold(),
         " Config ".into(),
         "<C> ".yellow().bold(),
         " Quit ".into(),
@@ -227,9 +212,9 @@ pub fn render_authentication_prompt(f: &mut Frame, app: &mut App, area: Rect) {
     let start_url = app.config_options.options.iter().find(|option| option.name == "start_url").unwrap().value.clone();
     let url_title = Title::from(format!(" Start URL: {} ", start_url).bold());
 
-    let prompt_title = Title::from(" AWS SSO Authentication Required ".bold());
-    let prompt_block = Block::bordered()
-        .title(prompt_title.alignment(Alignment::Center))
+    let loading_title = Title::from(" Loading AWS Accounts ".bold());
+    let loading_block = Block::bordered()
+        .title(loading_title.alignment(Alignment::Center))
         .title(instructions
             .alignment(Alignment::Center)
             .position(Position::Bottom)
@@ -238,7 +223,7 @@ pub fn render_authentication_prompt(f: &mut Frame, app: &mut App, area: Rect) {
         .border_set(border::THICK)
         .borders(Borders::ALL);
 
-    // Create centered layout for prompt
+    // Create centered layout for loading message
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -257,9 +242,14 @@ pub fn render_authentication_prompt(f: &mut Frame, app: &mut App, area: Rect) {
         ])
         .split(vertical[1]);
 
-    let prompt_area = horizontal[1];
+    let loading_area = horizontal[1];
 
-    let prompt_text = if start_url.is_empty() {
+    // Create a simple spinner animation
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
+    let spinner_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let spinner = spinner_chars[(now / 100) as usize % spinner_chars.len()];
+
+    let loading_text = if start_url.is_empty() {
         Text::from(vec![
             Line::from(vec![
                 Span::styled("Configuration Required", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
@@ -275,26 +265,22 @@ pub fn render_authentication_prompt(f: &mut Frame, app: &mut App, area: Rect) {
     } else {
         Text::from(vec![
             Line::from(vec![
-                Span::styled("Ready to Authenticate", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{} Initializing AWS SSO...", spinner), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             ]),
             Line::from(""),
             Line::from(vec![
-                Span::styled("Press ENTER to authenticate with AWS SSO", Style::default().fg(Color::White)),
+                Span::styled("Connecting to AWS and loading your accounts.", Style::default().fg(Color::White)),
             ]),
             Line::from(vec![
-                Span::styled("and load your AWS accounts.", Style::default().fg(Color::White)),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("Your browser will open for authentication.", Style::default().fg(Color::Gray)),
+                Span::styled("This may take a moment on first run.", Style::default().fg(Color::Gray)),
             ]),
         ])
     };
 
-    let prompt_paragraph = Paragraph::new(prompt_text)
-        .block(prompt_block)
+    let loading_paragraph = Paragraph::new(loading_text)
+        .block(loading_block)
         .alignment(Alignment::Center)
         .wrap(Wrap { trim: true });
 
-    f.render_widget(prompt_paragraph, prompt_area);
+    f.render_widget(loading_paragraph, loading_area);
 }
