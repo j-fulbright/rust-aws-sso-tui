@@ -10,10 +10,10 @@ use app::*;
 use color_eyre::Result;
 
 fn main() -> Result<()> {
-    // Initialize logging - set RUST_LOG=debug for detailed output
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // Initialize logging - set RUST_LOG=debug for detailed output, default to warn level
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     
-    log::info!("Starting assumer TUI application");
+    log::debug!("Starting assumer TUI application");
     
     errors::install_hooks()?;  
     let mut terminal = tui::init()?;

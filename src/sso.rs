@@ -36,7 +36,7 @@ impl Default for ConfigProvider {
 
 #[::tokio::main]
 pub async fn get_aws_config(start_url: &str, region: &str, app: &mut App, new_token: Option<bool>) -> Result<ConfigProvider, anyhow::Error> {
-    log::info!("get_aws_config called with start_url='{}', region='{}', new_token={:?}", 
+    log::debug!("get_aws_config called with start_url='{}', region='{}', new_token={:?}", 
                start_url, region, new_token);
     
     if start_url.is_empty() {
@@ -64,7 +64,7 @@ pub async fn get_aws_config(start_url: &str, region: &str, app: &mut App, new_to
 
     match access_token {
         Ok(token) => {
-            log::info!("Access token obtained successfully, creating ConfigProvider");
+            log::debug!("Access token obtained successfully, creating ConfigProvider");
             Ok(ConfigProvider {
                 access_token: token,
                 account_info_provider: Some(AccountInfoProvider::new(&config)),
@@ -95,7 +95,7 @@ pub async fn get_sso_accounts(app: &mut App) -> Result<Vec<AccountInfo>, anyhow:
         .await?;
     
     sso_accounts.sort();
-    log::info!("Retrieved and sorted {} SSO accounts", sso_accounts.len());
+    log::debug!("Retrieved and sorted {} SSO accounts", sso_accounts.len());
     
     Ok(sso_accounts)
 }

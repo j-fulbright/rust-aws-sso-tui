@@ -132,7 +132,7 @@ impl App {
 
     /// runs the application's main loop until the user quits
     pub fn run(&mut self, terminal: &mut tui::Tui) -> Result<()> {   
-        log::info!("Starting application run loop");
+        log::debug!("Starting application run loop");
         self.routes = self.create_routes();
         self.config_options = ConfigOptions {
             options: vec![
@@ -162,11 +162,11 @@ impl App {
             }
         }      
         
-        log::info!("Config loaded, starting automatic authentication");
+        log::debug!("Config loaded, starting automatic authentication");
         // Start automatic authentication on startup
         self.load_aws_config(Some(false));      
 
-        log::info!("Authentication completed, loading account list");
+        log::debug!("Authentication completed, loading account list");
         self.get_account_list();
                       
         while !self.exit {
@@ -180,7 +180,7 @@ impl App {
         let start_url = self.config_options.options.iter().find(|option| option.name == "start_url").unwrap().value.clone();
         let region = self.config_options.options.iter().find(|option| option.name == "region").unwrap().value.clone();
 
-        log::info!("Loading AWS config with start_url='{}', region='{}', new_token={:?}", 
+        log::debug!("Loading AWS config with start_url='{}', region='{}', new_token={:?}", 
                    start_url, region, new_token);
 
         // Set authenticating flag before starting authentication
@@ -191,7 +191,7 @@ impl App {
         
         self.aws_config_provider = match sso::get_aws_config(start_url.as_str(), region.as_str(), self, Some(new_token.unwrap_or(false))) {
             Ok(access_token) => {
-                log::info!("AWS config loaded successfully");
+        log::debug!("AWS config loaded successfully");
                 self.authenticating = false;
                 access_token
             },
@@ -209,12 +209,12 @@ impl App {
     pub fn get_account_list(&mut self) {
         log::debug!("Getting account list");
         if !self.aws_config_provider.account_info_provider.is_none() {
-            log::info!("AWS config provider available, fetching SSO accounts");
+            log::debug!("AWS config provider available, fetching SSO accounts");
             let sso_accounts = sso::get_sso_accounts(self);
             self.rows = vec![];
             match sso_accounts {
                 Ok(sso_accounts) => {          
-                    log::info!("Successfully loaded {} SSO accounts", sso_accounts.len());
+                    log::debug!("Successfully loaded {} SSO accounts", sso_accounts.len());
                     for account in sso_accounts {
                         log::debug!("Adding account: {} ({})", account.account_name, account.account_id);
                         self.rows.push(AccountRow {
