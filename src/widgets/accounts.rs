@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use ratatui::{    
-    crossterm::event::{KeyCode, KeyEvent}, layout::{Alignment, Constraint, Layout, Rect}, style::{Style, Stylize}, symbols::border, text::Line, widgets::{
-        block::{Position, Title}, Block, Cell, Row, Table
+    crossterm::event::{KeyCode, KeyEvent}, layout::{Alignment, Constraint, Direction, Layout, Rect}, style::{Color, Modifier, Style, Stylize}, symbols::border, text::{Line, Span, Text}, widgets::{
+        block::{Position, Title}, Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap
     }, Frame
 };
 
@@ -38,6 +38,12 @@ pub fn handle_key_events(app: &mut App, key: KeyEvent) -> Result<(), ()>{
 }
 
 pub fn render_accounts(f: &mut Frame, app: &mut App, area: Rect) {
+    // If authenticating, show authentication UI instead of account list
+    if app.authenticating {
+        render_authentication_ui(f, app, area);
+        return;
+    }
+
     let style = {
         if app.is_selected {
             Style::new().white()
@@ -101,4 +107,82 @@ pub fn render_accounts(f: &mut Frame, app: &mut App, area: Rect) {
         .highlight_symbol(">>");
 
     f.render_stateful_widget(table, area, &mut app.table_state);
+}
+
+pub fn render_authentication_ui(f: &mut Frame, app: &mut App, area: Rect) {
+
+    let instructions = Title::from(Line::from(vec![
+        " Cancel ".into(),
+        "<ESC> ".red().bold(),
+    ]));
+
+    let auth_title = Title::from(" Authenticating with AWS SSO ".bold());
+    let auth_block = Block::bordered()
+        .title(auth_title.alignment(Alignment::Center))
+        .title(instructions
+            .alignment(Alignment::Center)
+            .position(Position::Bottom)
+        )
+        .border_set(border::THICK)
+        .borders(Borders::ALL);
+
+    // Create centered layout for auth message
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(25),
+            Constraint::Percentage(50),
+            Constraint::Percentage(25),
+        ])
+        .split(area);
+
+    let horizontal = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(10),
+            Constraint::Percentage(80),
+            Constraint::Percentage(10),
+        ])
+        .split(vertical[1]);
+
+    let auth_area = horizontal[1];
+
+    // Authentication message text
+    let auth_text = if app.token_prompt.is_empty() {
+        Text::from(vec![
+            Line::from(vec![
+                Span::styled("Authenticating with AWS SSO...", Style::default().fg(Color::Yellow)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Please wait while we authenticate with AWS.", Style::default().fg(Color::White)),
+            ]),
+            Line::from(vec![
+                Span::styled("Your browser should open automatically for authentication.", Style::default().fg(Color::Gray)),
+            ]),
+        ])
+    } else {
+        Text::from(vec![
+            Line::from(vec![
+                Span::styled("AWS SSO Authentication", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled(&app.token_prompt, Style::default().fg(Color::White)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Complete authentication in your browser, then return here.", Style::default().fg(Color::Gray)),
+            ]),
+        ])
+    };
+
+    let auth_paragraph = Paragraph::new(auth_text)
+        .block(auth_block)
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: true });
+
+    // Clear the area first to ensure clean rendering
+    f.render_widget(Clear, area);
+    f.render_widget(auth_paragraph, auth_area);
 }
