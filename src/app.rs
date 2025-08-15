@@ -70,6 +70,7 @@ pub struct App {
     pub current_page: CurrentPage,
     pub routes: HashMap<CurrentPage, RouteConfig>,
     pub config_options: ConfigOptions,
+    pub authenticating: bool,
 }
 
 impl Default for App {
@@ -96,6 +97,7 @@ impl Default for App {
             config_options: ConfigOptions {
                 options: vec![],
             },
+            authenticating: false,
         }
     }
 }
@@ -173,9 +175,20 @@ impl App {
         let start_url = self.config_options.options.iter().find(|option| option.name == "start_url").unwrap().value.clone();
         let region = self.config_options.options.iter().find(|option| option.name == "region").unwrap().value.clone();
 
+        // Set authenticating flag before starting authentication
+        self.authenticating = true;
+        self.exit = false; // Reset exit flag
+        
         self.aws_config_provider = match sso::get_aws_config(start_url.as_str(), region.as_str(), self, Some(new_token.unwrap_or(false))) {
-            Ok(access_token) => access_token,
-            Err(_) => ConfigProvider::default(),
+            Ok(access_token) => {
+                self.authenticating = false;
+                access_token
+            },
+            Err(_) => {
+                self.authenticating = false;
+                self.exit = false; // Reset exit flag after authentication failure
+                ConfigProvider::default()
+            },
         };
     }
 
@@ -280,6 +293,20 @@ impl App {
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<()> {
+        use ratatui::crossterm::event::{KeyCode};
+        
+        // Handle ESC key during authentication to cancel
+        if self.authenticating && key_event.code == KeyCode::Esc {
+            self.exit = true;
+            self.token_prompt = "Authentication cancelled by user".to_string();
+            return Ok(());
+        }
+        
+        // Reset exit flag if not authenticating (for normal ESC usage)
+        if !self.authenticating && self.exit {
+            self.exit = false;
+        }
+        
         self.credential_message = "".to_string();
         match self.current_page {
             CurrentPage::AccountList => {

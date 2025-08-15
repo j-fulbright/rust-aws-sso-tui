@@ -46,7 +46,7 @@ pub fn handle_key_events(app: &mut App, key: KeyEvent) -> Result<(), anyhow::Err
         KeyCode::Up => {
             let i = match app.config_table_state.selected() {
                 Some(i) => {
-                    if i <= 0 {
+                    if i == 0 {
                         1
                     } else {
                         i - 1

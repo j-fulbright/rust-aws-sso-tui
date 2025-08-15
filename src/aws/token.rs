@@ -5,6 +5,7 @@ use aws_config::SdkConfig;
 use aws_sdk_ssooidc::Client;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
+use tokio::time::{sleep, timeout, Duration as TokioDuration};
 
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Default, Clone)]
@@ -120,49 +121,86 @@ impl SsoAccessTokenProvider {
 
         open::that(auth_response.verification_uri_complete().unwrap())?;
 
-        app.token_prompt = format!("Verify authorization code: {}", auth_response.user_code().unwrap());
+        app.token_prompt = format!("Verify authorization code: {} (Press ESC to cancel)", auth_response.user_code().unwrap());
 
         let interval = auth_response.interval();
-        loop {
-            let token_response = self
-                .client
-                .create_token()
-                .client_id(device_client.client_id.as_str())
-                .client_secret(device_client.client_secret.as_str())
-                .grant_type(Self::DEVICE_GRANT_TYPE)
-                .device_code(auth_response.device_code().unwrap())
-                .send()
-                .await;
+        let max_retries = 120; // 120 retries * 5 seconds = 10 minutes max
+        let total_timeout = TokioDuration::from_secs(600); // 10 minutes total timeout
+        let mut retry_count = 0;
 
-            match token_response {
-                Ok(out) => {
-                    let access_token = out.access_token().unwrap();
-                    let refresh_token = out.refresh_token().unwrap();
-                    let expires_at = Utc::now() + Duration::seconds(out.expires_in() as i64);
-
-                    let access_token = AccessToken {
-                        region: String::from(self.client.config().region().unwrap().to_string()),
-                        start_url: String::from(start_url),
-                        access_token: String::from(access_token),
-                        expires_at,
-                        device_client,
-                        refresh_token: String::from(refresh_token),
-                    };
-
-                    app.token_prompt = String::new();
-
-                    break Ok(self.cache.cache_token(access_token)?);
+        // Wrap the entire polling loop in a timeout
+        let result = timeout(total_timeout, async {
+            loop {
+                // Check for cancellation flag
+                if app.exit && app.authenticating {
+                    return Err(anyhow!("Authentication cancelled by user"));
                 }
-                Err(err) => {
-                    let service_error = err.into_service_error();
-                    if service_error.is_access_denied_exception() {
-                        break Err(anyhow!("Access request rejected"));
-                    } 
 
-                    let millis = Duration::seconds(interval as i64);
-                    std::thread::sleep(millis.to_std()?);
+                let token_response = self
+                    .client
+                    .create_token()
+                    .client_id(device_client.client_id.as_str())
+                    .client_secret(device_client.client_secret.as_str())
+                    .grant_type(Self::DEVICE_GRANT_TYPE)
+                    .device_code(auth_response.device_code().unwrap())
+                    .send()
+                    .await;
+
+                match token_response {
+                    Ok(out) => {
+                        let access_token = out.access_token().unwrap();
+                        let refresh_token = out.refresh_token().unwrap();
+                        let expires_at = Utc::now() + Duration::seconds(out.expires_in() as i64);
+
+                        let access_token = AccessToken {
+                            region: String::from(self.client.config().region().unwrap().to_string()),
+                            start_url: String::from(start_url),
+                            access_token: String::from(access_token),
+                            expires_at,
+                            device_client,
+                            refresh_token: String::from(refresh_token),
+                        };
+
+                        app.token_prompt = String::new();
+
+                        return Ok(self.cache.cache_token(access_token)?);
+                    }
+                    Err(err) => {
+                        let service_error = err.into_service_error();
+                        
+                        // Handle specific AWS SSO errors
+                        if service_error.is_access_denied_exception() {
+                            return Err(anyhow!("Access request rejected"));
+                        }
+                        
+                        if service_error.is_expired_token_exception() {
+                            return Err(anyhow!("Authentication token expired. Please try again."));
+                        }
+
+                        // Check retry limit
+                        retry_count += 1;
+                        if retry_count >= max_retries {
+                            return Err(anyhow!("Authentication timed out after {} retries. Please try again.", max_retries));
+                        }
+
+                        // Update prompt with retry info
+                        app.token_prompt = format!("Verify authorization code: {} (Attempt {}/{}) (Press ESC to cancel)", 
+                            auth_response.user_code().unwrap(), retry_count, max_retries);
+
+                        // Use async sleep instead of blocking sleep
+                        let sleep_duration = TokioDuration::from_secs(interval as u64);
+                        sleep(sleep_duration).await;
+                    }
                 }
             }
+        }).await;
+
+        // Handle timeout and clear prompt
+        app.token_prompt = String::new();
+        
+        match result {
+            Ok(auth_result) => auth_result,
+            Err(_) => Err(anyhow!("Authentication timed out after 10 minutes. Please try again.")),
         }
     }
 
