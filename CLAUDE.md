@@ -4,103 +4,61 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is "assumer", a Terminal User Interface (TUI) application for AWS SSO authentication and role assumption. The application is built in Rust using the ratatui library for the terminal interface and the AWS SDK for Rust for AWS integration.
+"assumer" is a Terminal User Interface (TUI) for AWS SSO authentication and role assumption, built in Rust with ratatui and the AWS SDK for Rust.
 
-The application provides a complete workflow for AWS SSO:
-1. Account listing and selection
-2. Role selection within accounts
-3. Credential generation and export
-4. Browser-based console access (requires Granted Firefox extension)
-5. AWS CLI profile management
+Workflow: authenticate via SSO → select account → select role → export credentials or open browser console.
+
+## Commands
+
+```bash
+cargo build           # debug build
+cargo build --release # release build
+cargo run             # run (requires ~/.assumer/config.ini with start_url)
+cargo check           # fast type-check without linking
+cargo clippy          # lint
+cargo fmt             # format
+```
+
+Debug logging (logs go to stderr — redirect to avoid corrupting the TUI):
+```bash
+RUST_LOG=debug cargo run 2>/tmp/assumer.log
+```
 
 ## Architecture
 
-The codebase follows a modular architecture with these key components:
+### State and routing (`app.rs`)
+`App` is the single shared mutable state passed everywhere. `CurrentPage` is an enum (`AccountList`, `Config`, `Credentials`, `Roles`) that drives which widget renders. Routes are stored in `App.routes: HashMap<CurrentPage, RouteConfig>` where each entry holds a layout fn and a render fn. Navigation is purely state mutation — there is no router framework.
 
-### Core Modules
-- `main.rs` - Entry point, initializes TUI and runs the main application loop
-- `app.rs` - Central application state and routing system with a page-based navigation model
-- `tui.rs` - Terminal initialization and restoration using crossterm/ratatui
-- `sso.rs` - AWS SSO operations and credential management
-- `aws/` - AWS SDK integration components
-- `widgets/` - UI components for different application pages
-- `utils/` - Utility functions for JSON and serialization
+### Async boundary (`sso.rs`)
+All AWS SDK calls are async, but the ratatui event loop is synchronous. Each public function in `sso.rs` is annotated `#[tokio::main]`, making it a blocking call from the perspective of `app.rs`. This means AWS calls block the render loop while running — there is no background task or channel-based concurrency.
 
-### Application Flow
-The app uses a state-driven routing system where different pages (AccountList, Config, Credentials, Roles) are rendered based on the application state. The main state transitions are:
-- Start → AccountList (shows available AWS accounts)
-- AccountList → Roles (shows roles for selected account)
-- Roles → Credentials (displays and manages credentials for selected role)
-- Any page → Config (configuration management)
+### AWS module (`src/aws/`)
+- `token.rs` — `SsoAccessTokenProvider`: handles device authorization flow (OIDC), token refresh, and caches tokens to `~/.aws/sso/cache/<sha1(session_name)>.json`
+- `token_cache.rs` — `AccessTokenCache`: reads/writes the JSON cache file; cache key is SHA1 of the SSO session name
+- `account_info_provider.rs` — `AccountInfoProvider`: wraps `aws-sdk-sso` client; `get_account_list` paginates via `nextToken` in pages of 100 (AWS API limit)
+- `cli.rs` — derives the SSO session name from the start URL subdomain (`sso-{subdomain}`)
 
-### Key Data Structures
-- `App` - Main application state containing all UI state, selected items, and configuration
-- `AccountRow` - Represents an AWS account with its roles
-- `RoleCredentials` - AWS temporary credentials for a specific role
-- `ConfigProvider` - Manages AWS SDK configuration and token providers
+### Token flow
+1. On startup, `App::load_aws_config` builds a `ConfigProvider` with an `SsoAccessTokenProvider`
+2. `get_access_token` checks the cache → refreshes if expired → triggers full device auth flow if refresh fails
+3. Device auth opens a browser for the user to approve, then polls until approved
 
-## Common Development Commands
+### Configuration
+`~/.assumer/config.ini` (`[Main]` section):
+- `start_url` — required; AWS SSO start URL
+- `aws_config_path` — defaults to `~/.aws`
+- `region` — defaults to `us-east-1`
 
-### Build and Run
+AWS profiles written to `~/.aws/config` use the format `assumer-{account_name}/{role_name}`.
+
+## Release Process
+
+1. Bump `version` in `Cargo.toml`, commit and push to `main`
+2. Create a GitHub release with a `vX.Y.Z` tag on `https://github.com/j-fulbright/rust-aws-sso-tui`
+3. The `homebrew-release.yml` workflow fires automatically and updates `https://github.com/j-fulbright/homebrew-tools` with the new version and SHA256
+
+Install via:
 ```bash
-# Build the project
-cargo build
-
-# Run the application
-cargo run
-
-# Build release version
-cargo build --release
-```
-
-### Development
-```bash
-# Check code without building
-cargo check
-
-# Run tests (if any)
-cargo test
-
-# Format code
-cargo fmt
-
-# Run clippy lints
-cargo clippy
-
-# Clean build artifacts
-cargo clean
-```
-
-### Installation
-The project can be installed via Homebrew:
-```bash
-brew tap jrivers-iclass/tools
+brew tap j-fulbright/tools
 brew install assumer
 ```
-
-## Configuration
-
-The application stores configuration in `~/.assumer/config.ini` with these key settings:
-- `start_url` - AWS SSO start URL (required)
-- `aws_config_path` - Path to AWS configuration directory (defaults to ~/.aws)
-- `region` - AWS region (defaults to us-east-1)
-
-AWS profiles are exported to `~/.aws/config` with the format `assumer-{account_name}/{role_name}`.
-
-## Dependencies
-
-Key external dependencies:
-- `ratatui` - Terminal UI framework
-- `aws-config`, `aws-sdk-sso`, `aws-sdk-ssooidc` - AWS SDK components
-- `tokio` - Async runtime
-- `anyhow`/`color-eyre` - Error handling
-- `serde`/`serde_json` - Serialization
-- `directories` - Cross-platform directory handling
-- `rust-ini` - INI file configuration
-
-## Browser Integration
-
-The application integrates with Firefox through the Granted extension for console access. It generates federated sign-in URLs and opens them using platform-specific commands:
-- macOS: `open -na Firefox`
-- Windows: PowerShell with `Start-Process firefox`
-- Linux: Direct `firefox` command
