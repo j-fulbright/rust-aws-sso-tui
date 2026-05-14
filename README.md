@@ -10,7 +10,7 @@ To install this project using Homebrew, follow these steps:
 2. Run the following command to tap into the repository:
 
 ```bash
-brew tap jrivers-iclass/tools
+brew tap j-fulbright/tools
 ```
 
 3. Run the following command to install AWS SSO:
