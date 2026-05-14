@@ -1,18 +1,22 @@
 use std::rc::Rc;
 
-use ratatui::{    
-    crossterm::event::{KeyCode, KeyEvent}, layout::{Alignment, Constraint, Layout, Rect}, style::{Style, Stylize}, symbols::border, text::Line, widgets::{
-        block::{Position, Title}, Block, Cell, Row, Table
-    }, Frame
+use ratatui::{
+    crossterm::event::{KeyCode, KeyEvent},
+    layout::{Constraint, Layout, Rect},
+    style::{Style, Stylize},
+    symbols::border,
+    text::Line,
+    widgets::{Block, Cell, Row, Table},
+    Frame,
 };
 
 use crate::app::App;
 
 pub fn get_layout(f: &mut Frame) -> Rc<[Rect]> {
-    Layout::horizontal([Constraint::Min(5), Constraint::Min(5)]).split(f.size())
+    Layout::horizontal([Constraint::Min(5), Constraint::Min(5)]).split(f.area())
 }
 
-pub fn handle_key_events(app: &mut App, key: KeyEvent) -> Result<(), ()>{
+pub fn handle_key_events(app: &mut App, key: KeyEvent) -> Result<(), ()> {
     match key.code {
         KeyCode::Down => {
             app.next_role();
@@ -27,7 +31,7 @@ pub fn handle_key_events(app: &mut App, key: KeyEvent) -> Result<(), ()>{
         KeyCode::Right => {
             app.select_role();
             app.current_page = crate::app::CurrentPage::Credentials;
-        }        
+        }
         KeyCode::Char('q') => {
             app.exit = true;
         }
@@ -38,48 +42,36 @@ pub fn handle_key_events(app: &mut App, key: KeyEvent) -> Result<(), ()>{
 }
 
 pub fn render_roles(f: &mut Frame, app: &mut App, area: Rect) {
-    let instructions = Title::from(Line::from(vec![
+    let instructions = Line::from(vec![
         " Scroll Up ".into(),
         "<Up>".blue().bold(),
         " Scroll Down ".into(),
         "<Down>".blue().bold(),
-        " Select Role ".into(),        
+        " Select Role ".into(),
         "<Enter>".blue().bold(),
         " Back ".into(),
         "<Left>".blue().bold(),
         " Quit ".into(),
         "<Q> ".blue().bold(),
-    ]));
-    let role_list_title = Title::from(format!(" {} - Roles ", app.selected_account.account_name).bold());        
+    ]);
+
     let role_list_block = Block::bordered()
-        .title(role_list_title.alignment(Alignment::Left))   
-        .title(instructions
-            .alignment(Alignment::Center)
-            .position(Position::Bottom)
-        )        
+        .title_top(Line::from(format!(" {} - Roles ", app.selected_account.account_name)).bold().left_aligned())
+        .title_bottom(instructions.centered())
         .border_set(border::THICK);
 
-    let widths = [
-        Constraint::Min(10)
-    ];
+    let widths = [Constraint::Min(10)];
 
     let rows = app.selected_account.roles.iter().map(|row| {
-        Row::new(vec![
-            Cell::from(row.clone())
-        ])
-    });    
+        Row::new(vec![Cell::from(row.clone())])
+    });
 
-    // let mut binding = app.selected_account.clone();
     let table = Table::new(rows, widths)
         .column_spacing(1)
         .style(Style::new().blue())
-        .header(
-            Row::new(vec!["Role"])
-                .style(Style::new().bold())                            
-        )                                
-        //.footer(Row::new(vec!["Selected Account", &binding.account_id]).bold().yellow())
+        .header(Row::new(vec!["Role"]).style(Style::new().bold()))
         .block(role_list_block)
-        .highlight_style(Style::new().reversed())
+        .row_highlight_style(Style::new().reversed())
         .highlight_symbol(">>");
 
     f.render_stateful_widget(table, area, &mut app.role_table_state);
