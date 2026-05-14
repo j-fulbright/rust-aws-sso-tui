@@ -1,4 +1,4 @@
-use aws_sdk_sso::{operation::get_role_credentials::GetRoleCredentialsOutput, Client};
+use aws_sdk_sso::{operation::get_role_credentials::GetRoleCredentialsOutput, Client, error::SdkError};
 use anyhow::Result;
 use std::fmt::Display;
 use serde::{ Deserialize, Serialize };
@@ -30,21 +30,38 @@ impl AccountInfoProvider {
     }
 
     pub async fn get_account_list(&self, access_token: &AccessToken) -> Result<Vec<AccountInfo>> {
-        let list_accounts = self.client.list_accounts()
-            .access_token(access_token.access_token.as_str())
-            .max_results(300)
-            .send().await?;
-    
-        let account_infos = list_accounts.account_list().iter()
-            .map(|account| {
-                AccountInfo {
+        let mut account_infos = Vec::new();
+        let mut next_token: Option<String> = None;
+
+        loop {
+            let mut req = self.client.list_accounts()
+                .access_token(access_token.access_token.as_str())
+                .max_results(100);
+
+            if let Some(token) = next_token {
+                req = req.next_token(token);
+            }
+
+            let resp = req.send().await
+                .map_err(|e| match e {
+                    SdkError::ServiceError(ref se) => anyhow::anyhow!("AWS service error: {:?}", se.err()),
+                    other => anyhow::anyhow!("{:?}", other),
+                })?;
+
+            for account in resp.account_list() {
+                account_infos.push(AccountInfo {
                     account_id: String::from(account.account_id().unwrap()),
                     account_name: String::from(account.account_name().unwrap_or("unknown")),
-                    roles: vec![]
-                }
-            })
-            .collect::<Vec<_>>();
-    
+                    roles: vec![],
+                });
+            }
+
+            next_token = resp.next_token().map(String::from);
+            if next_token.is_none() {
+                break;
+            }
+        }
+
         Ok(account_infos)
     }
 
