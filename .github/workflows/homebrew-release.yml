@@ -23,7 +23,7 @@ jobs:
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
       - name: Checkout homebrew-tools
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: j-fulbright/homebrew-tools
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
