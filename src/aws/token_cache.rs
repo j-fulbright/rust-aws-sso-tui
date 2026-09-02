@@ -33,7 +33,7 @@ impl AccessTokenCache {
 
         let mut hasher = Sha1::new();
         hasher.update(self.sso_session_name.as_str());
-    
-        format!("{:02x}", hasher.finalize())
+
+        hasher.finalize().iter().map(|byte| format!("{:02x}", byte)).collect()
     }
 }
