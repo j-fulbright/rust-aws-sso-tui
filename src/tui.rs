@@ -16,7 +16,12 @@ pub type Tui = Terminal<CrosstermBackend<Stdout>>;
 pub fn init() -> io::Result<Tui> {
     execute!(stdout(), EnterAlternateScreen)?;
     enable_raw_mode()?;
-    Terminal::new(CrosstermBackend::new(stdout()))
+    let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+    // Some terminal emulators retain the previous session's alternate-screen
+    // contents until something is drawn, which can briefly show stale data
+    // (including credentials) on startup. Clear it immediately.
+    terminal.clear()?;
+    Ok(terminal)
 }
 
 /// Restore the terminal to its original state
